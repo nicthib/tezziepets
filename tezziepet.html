@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Canvas</title>    
+<style>
+body {background:white;}
+canvas {
+  height:100vh;
+  width:100vh;
+  border: 1px solid black;
+}
+</style>
+</head>
+<body>
+<canvas id=canvas width=2000 height=2000></canvas>
+<script>
+
+
+/*--------------------------------funs, vars----------------------------------*/
+const {sin,cos,tan,round,sqrt,PI,ceil,floor,min,max,abs,pow,random} = Math;
+const ctx = canvas.getContext("2d");
+const st = setTimeout;
+const petsz = 32;
+const targetFPS = 30;
+const width = canvas.width;
+const height = canvas.height;
+const px = 200; 
+const py = 200;
+const stage_off = 1;
+const timeshift = 12;
+const start_tmp = Date.now();
+const stage_length = 1000*3600;
+let snapshot = false;
+/*----------------------------------------------------------------------------*/
+
+/*----------------------------------fxrand------------------------------------*/
+let alphabet = "123456789abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ"
+var fxhash = 'oo6Y98m8LvuraZxqbFzZnrAN13A6G9TJXSd9ivLQgn2N4bMrq96'
+let b58dec = (str) => str.split('').reduce((p,c,i) => p + alphabet.indexOf(c) * (pow(alphabet.length, str.length-i-1)), 0)
+let fxhashTrunc = fxhash.slice(2)
+let regex = new RegExp(".{" + ((fxhash.length/4)|0) + "}", 'g')
+let hashes = fxhashTrunc.match(regex).map(h => b58dec(h))
+let sfc32 = (a, b, c, d) => {
+  return () => {
+    a |= 0; b |= 0; c |= 0; d |= 0
+    var t = (a + b | 0) + d | 0
+    d = d + 1 | 0
+    a = b ^ b >>> 9
+    b = c + (c << 3) | 0
+    c = c << 21 | c >>> 11
+    c = c + t | 0
+    return (t >>> 0) / 4294967296
+  }
+}
+const fxrand = sfc32(...hashes)
+/*----------------------------------------------------------------------------*/
+
+/*----------------------------------noise------------------------------------*/
+const perlin = {
+    rand_vect: function(){
+        let theta = fxrand() * 2 * PI;
+        return {x: cos(theta), y: sin(theta)};
+    },
+    dot_prod_grid: function(x, y, vx, vy){
+        let g_vect;
+        let d_vect = {x: x - vx, y: y - vy};
+        if (this.gradients[[vx,vy]]){
+            g_vect = this.gradients[[vx,vy]];
+        } else {
+            g_vect = this.rand_vect();
+            this.gradients[[vx, vy]] = g_vect;
+        }
+        return d_vect.x * g_vect.x + d_vect.y * g_vect.y;
+    },
+    smootherstep: function(x){
+        return 6*x**5 - 15*x**4 + 10*x**3;
+    },
+    interp: function(x, a, b){
+        return a + this.smootherstep(x) * (b-a);
+    },
+    seed: function(){
+        this.gradients = {};
+        this.memory = {};
+    },
+    get: function(x, y) {
+        if (this.memory.hasOwnProperty([x,y]))
+            return this.memory[[x,y]];
+        let xf = floor(x);
+        let yf = floor(y);
+        //interpolate
+        let tl = this.dot_prod_grid(x, y, xf,   yf);
+        let tr = this.dot_prod_grid(x, y, xf+1, yf);
+        let bl = this.dot_prod_grid(x, y, xf,   yf+1);
+        let br = this.dot_prod_grid(x, y, xf+1, yf+1);
+        let xt = this.interp(x-xf, tl, tr);
+        let xb = this.interp(x-xf, bl, br);
+        let v = this.interp(y-yf, xt, xb);
+        this.memory[[x,y]] = v;
+        return v;
+    }
+}
+perlin.seed();
+/*----------------------------------------------------------------------------*/
+
+/*--------------------------------Built ins-----------------------------------*/
+int = parseInt
+const roundN = (value, nearest) => round(value / nearest) * nearest;
+function choice(array){return array[floor(fxrand() * array.length)]}
+function map(x,a,b,c,d){return (x-a)*(d-c)/(b-a)+c}
+function stage(){return 3}
+function tezname(){return 'tezzie'}
+function rand(a=1,b=null){return b==null?(fxrand()*a):fxrand()*(b-a)+a}
+function array(w,h=w,v=0){return [...Array((w))].map((x)=>Array(h).fill(v))}
+function arrayCopy(a,b){return [...a]}
+function d(h,k,x,y,a,b){return (x-h)**2/a**2+(y-k)**2/b**2}
+function noise(x,y){return perlin.get(x,y)}
+const pregrow = choice([['oooo'],['oohhhh'],['ooookhn']])[0];
+/*----------------------------------------------------------------------------*/
+
+/*----------------------------------Assets------------------------------------*/
+screen = array(200);
+function makeborder(){
+
+}
+//border = {x:0, y:0, w:200, fX:0, cdata:makeborder()};
+//stars = {x:0, y:0, w:200, fX:0, cdata:makestars()};
+//c_body = {x:50, y:55, w:31, fX:0, cdata:makebodies()};
+//bkg = {x:50, y:50, w:100, fX:0, cdata:makesky()};
+//cam = {x:0, y:0, w:34, fX:0, cdata: makeCamFrame()};
+
+// n_clouds=round(rand(3,8)); clouds=[];
+// for (let i=0;i<n_clouds;i++){
+//   clouds.push({
+//     x:rand(30,170),y:rand(40,70),
+//     w:20, h:20, fX:0,
+//     speed:rand()/20,cdata:makecloud()
+//   })
+
+bkg = {cdata:array(px,py,1),x:0,y:0,w:px,h:py,fX:0}
+dw = 75
+dh = 85
+for (x=0;x<px;x++){
+  for (y=0;y<py;y++){
+    od = d(px/2,py/2,x,y,dw,dh)
+    if (od < 1){
+      //od2 = roundN(sqrt(Math.abs(sqrt(x*100))**2+Math.abs(y-20)**2),40)
+      tmpcol = [100,100,100]
+    }
+    // Draw wood
+    else {
+      v = roundN(noise(x/40,y/5+fxrand()/10)*50,15)
+      tmpcol = [130+v,62+v,15+v]
+    }
+    bkg.cdata[x][y] = tmpcol
+  }
+}
+//treeData = {n:round(rand(2,8)),tx:[], ty:[], type:[]};
+// for (let i=0;i<treeData.n;i++){
+//   treeData.tx.push(round(rand(5,95)));
+//   treeData.ty.push(round(rand(mound(treeData.tx[i])+2,95)));
+//   treeData.type.push(choice([1,2]));
+// }
+//ground={x: 50, y: 50, w: 100,fX: 0,cdata: makeground()};
+//tree = makeTree();
+//flora = make_flora();
+//flora1={x:50, y:50, w:100, fX:0, cdata:flora.F1};
+//flora2={x:50, y:50, w:100, fX:0, cdata:flora.F2};
+pet={
+    x:round(fxrand(50,150)), y:115, 
+    w:petsz, h:petsz, 
+    sleeping: false,
+    lmt:0, 
+    speed:4,
+    sz:petsz,
+    fX:0,
+    mood:5,
+    grow_steps: pregrow+'abcde', 
+    cdata:array(petsz*8,petsz,1),
+    cmap:[[],[255,255,255],[0,0,0],[0,0,255]],
+    haslegs: false, 
+    name:tezname()
+  };
+gen_pet();
+/*----------------------------------------------------------------------------*/
+
+/*--------------------------------Rendering-----------------------------------*/
+function passToScreen(objkt){
+  for (let i=0; i<objkt.w; i++){
+    for (let j=0; j<objkt.h; j++){
+      ii = i + objkt.fX * objkt.w;
+      if (objkt.cdata[ii][j].length > 0){
+        screen[i+objkt.x][j+objkt.y] = 'rgb(' + objkt.cdata[ii][j].join() + ')';
+      }
+    }
+  }
+}
+
+function renderScreen(){
+  for (let i=0; i<px; i++){
+    for (let j=0; j<py; j++){
+      v = screen[i][j];
+      if (v!=0){
+        ctx.beginPath();
+        ctx.rect(i*width/px, j*height/py, width/px, height/py);
+        ctx.fillStyle = v;
+        ctx.fill();
+      }
+    }
+  }
+}
+
+function renderLoop(){
+  loopStart = performance.now();
+  
+  // precalcs
+  hour=getTime()-6;
+  hour=hour<0?hour+24:hour;
+  // if (hour<15){
+  //   c_body.fX=0;dX=hour/15;
+  //   c_body.y=dX<.5?55:55-40*cos(dX*PI);
+  // }
+  // else {
+  //   c_body.fX=1;dX=(hour-15)/9;
+  //   c_body.y=dX>.5?55:55+40*cos(dX*PI);
+  // }
+  // c_body.x=round(map(dX,0,1,bkg.x-c_body.w,bkg.x+bkg.w));
+  // bkg.cdata=make_sky();
+  //
+
+  // draw main assets
+  ctx.clearRect(0, 0, width, height);
+  passToScreen(bkg);
+  //passToScreen(c_body);
+  // for (let i=0;i<clouds.length;i++){
+  //   clouds[i].x=clouds[i].x<(bkg.x+bkg.w)?clouds[i].x+clouds[i].speed:(bkg.x-clouds[i].w);
+  //   passToScreen(clouds[i]);
+  // }
+  // passToScreen(ground);
+  // passToScreen(flora1);
+  passToScreen(pet);
+  // passToScreen(tree);
+  // passToScreen(flora2);
+  // passToScreen(border);
+  // passToScreen(tv);
+  //
+
+  if (snapshot){
+    mX=round(200*mouseX/q)+4;
+    mY=round(200*mouseY/q);
+    cam.x=mX-5; cam.y=mY-5;
+    passToScreen(cam);
+  }
+  renderScreen()
+  nextCall = max(0,1000/targetFPS - (performance.now() - loopStart));
+  setTimeout(() => {requestAnimationFrame(renderLoop)},nextCall);
+}
+
+function wind(c){
+  let ws = round(rand(2,6));
+  st(function(){c.x+=ws},0);
+  st(function(){c.x+=ws},100);
+  st(function(){c.x+=ws},300);
+  st(function(){c.x+=ws},600);
+  st(function(){c.x+=ws},1000);
+}
+/*----------------------------------------------------------------------------*/
+
+/*--------------------------------UX, time------------------------------------*/
+document.addEventListener("keydown", e => {
+  if (e.key=='ArrowLeft'){walk(1)}
+  if (e.key=='ArrowRight'){walk(0)}
+});
+
+function getTime(){
+  d = new Date();
+  return d.getHours();
+}
+
+function mouseClicked(){
+  if (snapshot){
+    snapshot = false;
+  }
+  mX=round(200*mouseX/q)+4;
+  mY=round(200*mouseY/q);
+  xoff=mX-(pet.x+pet.w/2);
+  yoff=mY-(pet.y+pet.h);
+  if (sqrt(xoff**2+yoff**2)<10&&stage()>=1){
+    walk(xoff>0);
+  }
+  // Left button: screenshot
+  if (Math.pow(Math.pow(Math.abs(mX-75),2)+Math.pow(Math.abs(mY-165),2),0.5) < 7){
+    snapshot=true;
+  }
+  // Middle button: power
+  if (Math.pow(Math.pow(Math.abs(mX-500),2)+Math.pow(Math.abs(mY-867),2),0.5) < 30){
+    power();
+  }
+  // Right button: stats
+  if (Math.pow(Math.pow(Math.abs(mX-640),2)+Math.pow(Math.abs(mY-820),2),0.5) < 30){
+    statpanel();
+  }
+  for (let i=0;i<clouds.length;i++){
+    cxoff=abs(mX-(clouds[i].x+clouds[i].w/2));
+    cyoff=abs(mY-(clouds[i].y+clouds[i].h));
+    if (cxoff<clouds[i].w/4&&cyoff<clouds[i].h/6){
+      wind(clouds[i])
+      break
+    }
+  }
+}
+
+/*----------------------------------------------------------------------------*/
+
+/*--------------------------------Pet Code------------------------------------*/
+
+function exist(){
+  hour=getTime()-6;
+  hour=hour<0?hour+24:hour;
+  pet.sleeping=hour>=18;
+  nextcycle=5000;
+  if (stage()>=2&&!pet.sleeping){
+    rand()<.95?breathe_in():walk(rand()>.5);
+    nextcycle=1500;
+  }
+  if (pet.sleeping&&stage()>=2&&(Date.now()-pet.lmt)>3000){
+    pet.lmt=Date.now();
+    st(function(){pet.fX=4},0)
+    st(function(){pet.fX=5},1000)
+    st(function(){pet.fX=6},1200)
+    st(function(){pet.fX=5},2200)
+    st(function(){pet.fX=4},2400)
+    nextcycle=5000;
+  }
+  pet.fX=stage()>=2?pet.fX:7;
+  st(exist,nextcycle);
+}
+
+function breathe_in(){
+  if ((Date.now()-pet.lmt)>1500){
+    pet.lmt=Date.now();pet.fX=1;
+    st(function(){pet.lmt=Date.now();pet.fX=0;},750)
+  }
+}
+
+function walk(d){
+  pet.lmt=Date.now();
+  pet.rs=pet.x+pet.w-pet.speed;
+  pet.ls=pet.x+pet.speed;
+  if (!d&&pet.rs<bkg.x+bkg.w){pet.fX=3;pet.x+=pet.speed}
+  else if(d&&pet.ls>bkg.x){pet.fX=2;pet.x-=pet.speed}
+  else {breathe_in()}
+  st(function(){pet.fX=0},300)
+}
+
+/*----------------------------------------------------------------------------*/
+
+/*------------------------------Pet Gen Code----------------------------------*/
+function grow(m){
+  for (let x=1;x<pet.sz-1;x++){
+    for (let y=1;y<pet.sz-1;y++){
+      n=0;
+      for (let i=-1;i<=1;i++){
+        for (let j=-1;j<=1;j++){
+          if (b[x+i][y+j]==1){
+            n++;
+          }
+        }
+      }
+      pet.Th=max(a[16].reduce((v1,v2)=>v1+v2),a[17].reduce((v1,v2)=>v1+v2));
+      arm=round(abs(pet.sz-pet.Th/2));
+      top=abs(pet.sz-y)<=pet.Th/2;
+      bot=abs(pet.sz-y)>=pet.Th/2;
+      n_x=(b[x-1][y]!=0||b[x+1][y]!=0);
+      n_y=(b[x][y+1]==1);
+      if(m=='o'&&n>0){a[x][y]=1}; // n0+
+      if(m=='a'&&n==3&&top&&!n_x&&n_y){a[x][y]=1}; // n3+
+      if(m=='b'&&n>=4&&bot){a[x][y]=1}; // n5+
+      if(m=='c'&&n==2&&bot){a[x][y]=1}; // n2+
+      if(m=='d'&&n==3&&bot&&!n_x&&n_y){a[x][y]=1}; // n3+
+      if(m=='e'&&n==4&&bot){a[x][y]=1}; // n4+
+      if(m=='f'&&n>=4&&bot){a[x][y]=1}; // n5+
+      if(m=='g'&&n_y&&n_x){a[x][y]=1}; // h+
+      if(m=='h'&&n_y){a[x][y]=1;a[x][y-1]=1}; // h++
+      if(m=='i'){a[x][y]=b[x][y+1];a[13][30]=1;a[14][30]=1;a[17][30]=1;a[18][30]=1}; // feet1
+      //if(m=='j'&&n_x&&(y==arm||y==arm+1)){a[x][y]=1}; // arm+
+      if(m=='k'&&n_x&&(y==arm||y==arm+1)){a[x][y]=1}; // arm+
+      //if(m=='l'){a[x][y]=b[x][y+1];a[12][30]=1;a[13][30]=1;a[18][30]=1;a[19][30]=1}; // feet2
+      if(m=='m'&&n_y&&(x==15||x==16)){a[x][y]=1}; // h+M
+      if(m=='n'&&n_y&&(x==14||x==15||x==16||x==17)){a[x][y]=1}; // h+MM
+      if(m=='p'&&n_y&&(x==12||x==13||x==18||x==19)){a[x][y]=1;a[x][y-1]=1}; // horns
+    }
+  }
+  C=35;
+  if(m=='i'){pet.foff--;pet.haslegs=true};
+  if(m=='r'){pet.mood+=2};
+  if(m=='s'){pet.mood-=2};
+  if(m=='t'){pet.c1.levels[0]-=C;pet.c1.levels[1]-=C;};
+  if(m=='u'){pet.c1.levels[1]-=C;pet.c1.levels[2]-=C;};
+  if(m=='v'){pet.c1.levels[0]-=C;pet.c1.levels[2]-=C;};
+  if(m=='w'){pet.c2.levels[0]-=C;pet.c2.levels[1]-=C;};
+  if(m=='x'){pet.c2.levels[1]-=C;pet.c2.levels[2]-=C;};
+  if(m=='y'){pet.c2.levels[0]-=C;pet.c2.levels[2]-=C;};  
+  if(m=='z'){pet.c1.levels[3]-=12;pet.c2.levels[3]-=12};
+  pet.mood=min(max(3,pet.mood),8);
+  for (let x=0;x<pet.sz;x++){b[x] = [...a[x]]}
+}
+
+function shrink(){
+  if (pet.Th > 2){
+    for (let x=1;x<(pet.sz-1);x++){
+      for (let y=1;y<(pet.sz-1);y++){
+        let n=0;
+        for (let i=-1;i<=1;i++){
+          for (let j=-1;j<=-1;j++){
+            b[x+i][y+j]==0?n++:0
+          }
+        }
+        n>1?a[x][y]=0:0;
+      }
+    }
+    for (let x=0;x<pet.sz;x++){b[x] = [...a[x]]}
+    pet.Th=min(a[16].reduce((v1,v2)=>v1+v2),a[17].reduce((v1,v2)=>v1+v2));
+    makeOutline()
+  }
+}
+
+function make(){
+  a=array(pet.sz);
+  b=array(pet.sz);
+  a[pet.sz/2-1][pet.sz-3]=1;
+  a[pet.sz/2][pet.sz-3]=1;
+  b[pet.sz/2-1][pet.sz-3]=1;
+  b[pet.sz/2][pet.sz-3]=1;
+  pet.foff=0;
+  for (let i=0;i<stage()+pregrow.length-2;i++){grow(pet.grow_steps[i].toLowerCase());}
+  makeOutline();
+}
+
+function makeEGG(){
+  b=array(pet.sz);
+  for (let i=1;i<pet.sz-1;i++){
+    for (let j=1;j<pet.sz-1;j++){
+      let x=(pet.sz/2-j+6)*3.5/pet.sz;
+      let y=(pet.sz/2-i)*3/pet.sz;
+      if ((x**2+(1.6*y*(1.4**x))**2)<.9){b[i][j]=3}
+    }
+  }
+  o=0;
+  if (stage()>1){
+    for (let i=1;i<pet.sz-1;i++){
+      b[i][23+o]=0;
+      o=((i%6<=2)?o+1:o-1)
+    }
+  }
+  makeOutline();
+}
+
+function deleg(){
+  if (pet.haslegs){
+    for (let x=1;x<(pet.sz-1);x++){
+      for (let y=1;y<(pet.sz-1);y++){
+        a[x][y]=b[x][y-1];
+      }
+      for (let x=0;x<pet.sz;x++){b[x] = [...a[x]]}
+    }
+    pet.Th=min(a[16].reduce((v1,v2)=>v1+v2),a[17].reduce((v1,v2)=>v1+v2));
+  }
+}
+
+function makeOutline(){
+  c=array(pet.sz);
+  for (let x=0;x<pet.sz;x++){
+    for (let y=0;y<pet.sz;y++){n=0;
+      for (let i=-1;i<=1;i++){
+        for (let j=-1;j<=1;j++){
+          if ((i+x)>=0&&(i+x)<pet.sz&&(j+y)>=0&&(j+y)<pet.sz){
+            if (a[x+i][y]==1||a[x][y+j]==1){
+              n++;
+            }
+          }
+        }
+      }
+      c[x][y]=(n>0 && b[x][y] == 0)?2:b[x][y];
+    }
+  }
+}
+
+function makeFace(x,sleep=false,walk=false){
+  mpos=pet.sz-ceil(map(pet.mood,0,10,1,pet.Th));
+  // eyes
+  LEx = pet.sz/2-2+x;
+  REx = pet.sz/2+1+x;
+  Ey = pet.foff+(sleep?pet.sz-2:mpos-1);
+  // for (let i=0;i<(walk?0:3);i++){
+  //   if (c[LEx-1][Ey]!=0||c[LEx][Ey-1]!=0||c[LEx-1][Ey-1]!=0){
+  //     Ey++;
+  //   }
+  // }
+  c[LEx][Ey]=2;
+  c[REx][Ey]=2;
+  // mouth
+  if (!sleep){
+    c[LEx+1][Ey+2]=2;
+    c[REx-1][Ey+2]=2;
+  }
+}
+
+function addBubble(w,idx){
+  for (let i=0;i<w+1;i++){
+    for (let j=0;j<w+1;j++){
+      D=sqrt((i-w/2)**2+(j-w/2)**2);
+      if (round(D)==round(w/2)){c[i+17][j+20]=2}
+      else if (round(D)<w/2){c[i+17][j+20]=3}
+    }
+  }
+}
+
+function ddraw(idx){
+  for (let x=0;x<pet.sz;x++){
+    let xx=x+idx*pet.sz;
+    for (let y=0;y<pet.sz;y++){
+      pet.cdata[xx][y] = pet.cmap[c[x][y]];
+    }
+  }
+}
+
+function gen_pet(){
+  // idle 1
+  make(); makeFace(0); ddraw(0);
+  
+  // idle 2
+  make(); shrink(); makeFace(0); ddraw(1);
+  
+  // move R
+  make(); deleg(); shrink(); grow(6); makeOutline(); makeFace(-1,false,true); ddraw(2);
+  
+  // move L
+  make(); deleg(); shrink(); grow(6); makeOutline(); makeFace(1,false,true); ddraw(3);
+  
+  // sleep 1
+  make(); deleg(); shrink(); shrink(); makeOutline(); makeFace(0,true); addBubble(4,4); ddraw(4);
+  
+  // sleep 2
+  make(); deleg(); shrink(); shrink(); shrink(); makeOutline(); makeFace(0,true); addBubble(5,5); ddraw(5);
+  
+  // sleep 3
+  make(); deleg(); shrink(); shrink(); shrink(); shrink(); makeOutline(); makeFace(0,true); addBubble(6,6); ddraw(6);
+
+  // egg
+  makeEGG(); ddraw(7);
+}
+
+function tezname(){
+  prefix=['tez','hic','ciph','mint','hash','zan','yaz','gen','rand','smol','fung','tok','jav','flok','gan','blok','nunc','got','bot','cryp','flip','burn','flor','non','pok','pix','pic','tic',];
+  suffix=['chi','shi','ee','y','oo','oi','zard','zos','zie','ite'];
+  title=['Sr.','Jr.','I','II','III','IV','V','Esq.','PhD'];
+  return choice(prefix)+choice(['a','i','o','u','a ','i ','o ','u '])+choice(prefix)+choice(suffix)+(rand()<.5?', '+choice(title):'')
+}
+/*----------------------------------------------------------------------------*/
+
+/*-----------------------------Begin Rendering--------------------------------*/
+exist();
+renderLoop();
+/*----------------------------------------------------------------------------*/
+
+</script>
+</body>
+</html>
